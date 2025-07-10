@@ -21,8 +21,8 @@ variables:
     SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
     GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
     SONAR_PROJECT_KEY: notify_service-core
-    SONAR_TELEGRAM_CHAT_ID: -1002294572965
-    SONAR_TELEGRAM_BOT_TOKEN: "7634185069:AAEU-2t7IoBszdiBSo3z9BJIVnyiK6QZo7M"
+    SONAR_TELEGRAM_CHAT_ID:
+    SONAR_TELEGRAM_BOT_TOKEN:
 
 
 sonarqube-check:
