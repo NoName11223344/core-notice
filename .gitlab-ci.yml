@@ -1,0 +1,143 @@
+stages:
+    - sonarqube-check
+    - build
+    - update-deployment-tag
+
+# default:
+#     image: docker:24.0.5
+#     services:
+#         - docker:24.0.5-dind
+#     before_script:
+#         - until docker info; do sleep 1; done
+#         - apk add git
+
+
+variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    IMAGE_NAME: core-notify
+    HARBOR_REGISTRY_URL: "bcr.baokim.vn"
+    HARBOR_REGISTRY_USERNAME: "notify-services"
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
+    GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
+    SONAR_PROJECT_KEY: notify_service-core
+    SONAR_TELEGRAM_CHAT_ID: -1002294572965
+    SONAR_TELEGRAM_BOT_TOKEN: "7634185069:AAEU-2t7IoBszdiBSo3z9BJIVnyiK6QZo7M"
+
+
+sonarqube-check:
+  stage: sonarqube-check
+  image: 
+    name: sonarsource/sonar-scanner-cli:11
+    entrypoint: [""]
+  script: 
+    - sonar-scanner -Dsonar.host.url="${SONAR_HOST_URL}"
+  tags:
+    - dev-runner
+  allow_failure: false
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    # - if: $CI_COMMIT_BRANCH == 'master'
+    # - if: $CI_COMMIT_BRANCH == 'release'
+    # - if: $CI_COMMIT_BRANCH == 'testing'
+    # - if: '$CI_COMMIT_BRANCH =~ /.*-Feature.*/'
+  after_script:
+    - |
+      curl -X POST "https://api.telegram.org/bot$SONAR_TELEGRAM_BOT_TOKEN/sendMessage" \
+        -d chat_id="$SONAR_TELEGRAM_CHAT_ID" \
+        -d text="🚨 <b>SonarQube Scan $CI_JOB_STATUS!</b>%0A- Project: <b>$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME</b>%0A- Pipeline: $CI_PIPELINE_URL%0A- Job: <b>$CI_JOB_NAME</b>%0A- Status: <b>$CI_JOB_STATUS</b>%0A- Developer: <b>$GITLAB_USER_NAME</b>" \
+        -d parse_mode="HTML" \
+        -H "Content-Type: application/x-www-form-urlencoded";
+
+
+build_testing:
+    stage: build
+    image: docker:24.0.5
+    services:
+        - docker:24.0.5-dind
+    before_script:
+        - until docker info; do sleep 1; done
+        - apk add git
+    tags:
+        - prod-runner
+    only:
+        - testing
+    script:
+        - export HARBOR_REGISTRY_PROJECT="notify-services-test"
+        - docker build -t "${HARBOR_REGISTRY_PROJECT}/${IMAGE_NAME}" .
+        - docker tag "${HARBOR_REGISTRY_PROJECT}/${IMAGE_NAME}" "${HARBOR_REGISTRY_URL}/${HARBOR_REGISTRY_PROJECT}/${IMAGE_NAME}:$CI_COMMIT_SHA"
+        - docker images
+        - echo $HARBOR_REGISTRY_PASSWORD | docker login -u "$HARBOR_REGISTRY_USERNAME" --password-stdin "$HARBOR_REGISTRY_URL"
+        - docker push "${HARBOR_REGISTRY_URL}/${HARBOR_REGISTRY_PROJECT}/${IMAGE_NAME}:$CI_COMMIT_SHA"
+
+build_master:
+    stage: build
+    image: docker:24.0.5
+    services:
+        - docker:24.0.5-dind
+    before_script:
+        - until docker info; do sleep 1; done
+        # - apk add git 
+    tags:
+        - prod-runner
+    only:
+        - master
+    script:
+        - export HARBOR_REGISTRY_PROJECT="notify-services-prod"
+        - docker build -t "${HARBOR_REGISTRY_PROJECT}/${IMAGE_NAME}" .
+        - docker tag "${HARBOR_REGISTRY_PROJECT}/${IMAGE_NAME}" "${HARBOR_REGISTRY_URL}/${HARBOR_REGISTRY_PROJECT}/${IMAGE_NAME}:$CI_COMMIT_SHA"
+        - docker images
+        - echo $HARBOR_REGISTRY_PASSWORD | docker login -u "$HARBOR_REGISTRY_USERNAME" --password-stdin "$HARBOR_REGISTRY_URL"
+        - docker push "${HARBOR_REGISTRY_URL}/${HARBOR_REGISTRY_PROJECT}/${IMAGE_NAME}:$CI_COMMIT_SHA"
+
+update-deployment-tag-testing:
+    stage: update-deployment-tag
+    tags:
+        - prod-runner
+    image: docker:24.0.5
+    services:
+        - docker:24.0.5-dind
+    before_script:
+        - until docker info; do sleep 1; done
+        - apk add git
+    only:
+        - testing
+    script:
+        - export CONFIG_REPO_NAME="dev-app-configs"
+        - echo "promoting into deployment!"
+        - git config --global user.email ci-bot@argocd.com && git config --global user.name ci-bot
+        - echo "cloning config repo $CONFIG_REPO_NAME"
+        - git clone https://$CONFIG_REPO_TOKEN@devops.baokim.vn:40443/infra/dev-app-configs.git
+        - cd $CONFIG_REPO_NAME
+        - echo "checkout master branch"
+        - git checkout master
+        - echo "updating image tag in values file"
+        - sed -i "s,tag:.*,tag:\ $CI_COMMIT_SHA," helm/charts/notify-services/core-notify-app/values.yaml
+        - git add . && git commit -m "update image tag to $CI_COMMIT_SHA"
+        - git push
+
+update-deployment-tag-master:
+    stage: update-deployment-tag
+    tags:
+        - prod-runner
+    image: docker:24.0.5
+    services:
+        - docker:24.0.5-dind
+    before_script:
+        - until docker info; do sleep 1; done
+        - apk add git
+    only:
+        - master
+    script:
+        - export CONFIG_REPO_NAME="prod-app-configs"
+        - echo "promoting into deployment!"
+        - git config --global user.email ci-bot@argocd.com && git config --global user.name ci-bot
+        - echo "cloning config repo $CONFIG_REPO_NAME"
+        - git clone https://$CONFIG_REPO_TOKEN@devops.baokim.vn:40443/infra/prod-app-configs.git
+        - cd $CONFIG_REPO_NAME
+        - echo "checkout master branch"
+        - git checkout master
+        - echo "updating image tag in values file"
+        - sed -i "s,tag:.*,tag:\ $CI_COMMIT_SHA," helm/charts/notify-services/core-notify-app/values.yaml
+        - git add . && git commit -m "update image tag to $CI_COMMIT_SHA"
+        - git push
